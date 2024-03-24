@@ -1,13 +1,16 @@
 # TODO add function to guess media type given extension
+from __future__ import annotations
 
 import logging
 
 logger = logging.getLogger("ffmpegio")
 
+from typing import Any, Literal, Union, Tuple, Dict
+
 import re, fractions, subprocess as sp
 from collections import namedtuple
 from fractions import Fraction
-from functools import partial
+from functools import partial, lru_cache
 
 from .path import ffmpeg as _ffmpeg
 from .errors import FFmpegError
@@ -33,11 +36,19 @@ _filterRegexp = re.compile(
     r"([T.])([S.])([C.])\s+(\S+)\s+(A+|V+|N|\|)->(A+|V+|N|\|)\s+(.*)"
 )  # g
 
-_cache = dict()
 
+@lru_cache()
+def _exec(
+    gopts: tuple[str],
+    sp_kwargs: tuple[tuple[str, Any]] | None = None,
+):
 
-def ffmpeg(gopts):
-    out = _ffmpeg(["-hide_banner", *gopts], stdout=sp.PIPE, encoding="utf-8")
+    sp_opts = {"stdout": sp.PIPE, "encoding": "utf-8"}
+
+    if sp_kwargs is not None:
+        sp_opts = {**dict(sp_kwargs), **sp_opts}
+
+    out = _ffmpeg(["-hide_banner", *gopts], **sp_opts)
 
     if out.returncode or out.stdout.count("\n") == 1:
         raise FFmpegError(out.stdout)
@@ -45,19 +56,32 @@ def ffmpeg(gopts):
     return out.stdout
 
 
-def _(cap):
-    return (None, _cache[cap]) if (cap in _cache) else (ffmpeg([f"-{cap}"]), None)
+def _run(
+    cap: str,
+    sp_kwargs: dict[str, Any] | None = None,
+):
+    return _exec((f"-{cap}",), sp_kwargs and tuple(sp_kwargs.items()))
 
 
-def __(type, name):
-    return (
-        (None, _cache[type][name])
-        if (type in _cache and name in _cache[type])
-        else (ffmpeg(["-help", f"{type}={name}"]), None)
+def _run_help(
+    type: str,
+    name: str | None = None,
+    sp_kwargs: dict[str, Any] | None = None,
+):
+    return _exec(
+        ("-help", type if name is None else f"{type}={name}"),
+        sp_kwargs and tuple(sp_kwargs.items()),
     )
 
 
-def options(type=None, name_only=False, return_desc=False):
+def options(
+    type: (
+        Literal["per-file", "video", "audio", "subtitle", "general", "global"] | None
+    ) = None,
+    name_only: bool | None = False,
+    return_desc: bool | None = False,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get FFmpeg command options
 
     :param type: specify option type to return, defaults to None
@@ -66,55 +90,55 @@ def options(type=None, name_only=False, return_desc=False):
     :type name_only: bool, optional
     :param return_desc: True to also return option description, defaults to False
     :type return_desc: bool, optional
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: dict of types of options
     :rtype: dict(dict or tuple) if type not specified
     """
-    try:
-        opts = _cache["options"]
-    except:
-        lines = ffmpeg(["-help", "long"]).split("\n")
-        ginds = [
-            (i + 1, l[:-1].lower())
-            for i, l in enumerate(lines)
-            if len(l) and l[0] not in "- \t" and l[-1] == ":"
-        ]
-        ginds.append((len(lines) + 1, None))
 
-        def parse_line(s):
-            m = re.match(r"\s*-(.+?) ([^ ]+?)? {2,}(.*)$", s)
-            return (m[1], m[2], m[3]) if m else None
+    lines = _run_help("long", sp_kwargs=sp_kwargs).split("\n")
+    ginds = [
+        (i + 1, l[:-1].lower())
+        for i, l in enumerate(lines)
+        if len(l) and l[0] not in "- \t" and l[-1] == ":"
+    ]
+    ginds.append((len(lines) + 1, None))
 
-        raw_opts = (
-            (
-                l,
-                {
-                    o[0]: o[1:]
-                    for o in (parse_line(s) for s in lines[i0 : i1 - 1])
-                    if o is not None
-                },
-            )
-            for (i0, l), (i1, _) in zip(ginds[:-1], ginds[1:])
+    def parse_line(s):
+        m = re.match(r"\s*-(.+?) ([^ ]+?)? {2,}(.*)$", s)
+        return (m[1], m[2], m[3]) if m else None
+
+    raw_opts = (
+        (
+            l,
+            {
+                o[0]: o[1:]
+                for o in (parse_line(s) for s in lines[i0 : i1 - 1])
+                if o is not None
+            },
         )
+        for (i0, l), (i1, _) in zip(ginds[:-1], ginds[1:])
+    )
 
-        opts = {
-            "video": {},
-            "audio": {},
-            "subtitle": {},
-            "general": {},
-            "global": {"overwrite": ("bool", "[ffmpegio] combining -y/-n options")},
-        }
-        for gname, gopts in raw_opts:
-            if "video" in gname:
-                opts["video"].update(gopts)
-            elif "audio" in gname:
-                opts["audio"].update(gopts)
-            elif "subtitle" in gname:
-                opts["subtitle"].update(gopts)
-            elif "per-file" in gname:
-                opts["general"].update(gopts)
-            else:
-                opts["global"].update(gopts)
-        _cache["options"] = opts
+    opts = {
+        "video": {},
+        "audio": {},
+        "subtitle": {},
+        "general": {},
+        "global": {"overwrite": ("bool", "[ffmpegio] combining -y/-n options")},
+    }
+    for gname, gopts in raw_opts:
+        if "video" in gname:
+            opts["video"].update(gopts)
+        elif "audio" in gname:
+            opts["audio"].update(gopts)
+        elif "subtitle" in gname:
+            opts["subtitle"].update(gopts)
+        elif "per-file" in gname:
+            opts["general"].update(gopts)
+        else:
+            opts["global"].update(gopts)
 
     if type == "per-file":
         opts = {
@@ -149,11 +173,17 @@ FilterSummary = namedtuple(
 # fmt:on
 
 
-def filters(type=None):
+def filters(
+    type: Literal["audio", "video", "dynamic"] | None = None,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get FFmpeg filters
 
     :param type: specify input or output stream type, defaults to None
     :type type: 'audio'|'video'|'dynamic', optional
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: dict of summary of the filters
     :rtype: dict(key,FilterSummary)
 
@@ -174,34 +204,31 @@ def filters(type=None):
     ================  ========  ===============================================
     """
 
-    stdout, data = _("filters")
-    if not data:
-        types = {"A": "audio", "V": "video", "N": "dynamic", "|": "none"}
+    stdout = _run("filters", sp_kwargs)
+    types = {"A": "audio", "V": "video", "N": "dynamic", "|": "none"}
 
-        data = {}
-        for match in _filterRegexp.finditer(stdout):
-            intype = types[match[5][0]]
-            outtype = types[match[6][0]]
-            data[match[4]] = FilterSummary(
-                description=match[7],
-                input=intype,
-                num_inputs=0
+    data = {}
+    for match in _filterRegexp.finditer(stdout):
+        intype = types[match[5][0]]
+        outtype = types[match[6][0]]
+        data[match[4]] = FilterSummary(
+            description=match[7],
+            input=intype,
+            num_inputs=(
+                0
                 if intype == "none"
-                else len(match[5])
-                if intype != "dynamic"
-                else None,
-                output=outtype,
-                num_outputs=0
+                else len(match[5]) if intype != "dynamic" else None
+            ),
+            output=outtype,
+            num_outputs=(
+                0
                 if outtype == "none"
-                else len(match[6])
-                if outtype != "dynamic"
-                else None,
-                timeline_support=match[1] == "T",
-                slice_threading=match[2] == "S",
-                command_support=match[3] == "C",
-            )
-
-        _cache["filters"] = data
+                else len(match[6]) if outtype != "dynamic" else None
+            ),
+            timeline_support=match[1] == "T",
+            slice_threading=match[2] == "S",
+            command_support=match[3] == "C",
+        )
 
     if type is not None:
         data = {k: v for k, v in data.items() if v.input == type or v.output == type}
@@ -209,13 +236,20 @@ def filters(type=None):
     return data
 
 
-def codecs(type=None, stream_type=None):
+def codecs(
+    type: Literal["decoder", "encoder"] | None = None,
+    stream_type: Literal["audio", "video", "subtitle"] | None = None,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get FFmpeg codecs
 
     :param type: Specify to list only decoder or encoder, defaults to None
     :type type: 'decoder'|'encoder', optional
     :param stream_type: Specify to stream type, defaults to None
     :type stream_type: 'audio'|'video'|'subtitle', optional
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: summary of FFmpeg codecs
     :rtype: dict
 
@@ -236,44 +270,41 @@ def codecs(type=None, stream_type=None):
     is_lossless       bool       True if codec can do lossless compression
     ================  =========  ===============================================
     """
-    stdout, data = _("codecs")
-    if not data:
-        data = {}
-        for match in _ffCodecRegexp.finditer(stdout):
-            stype = {"V": "video", "A": "audio", "S": "subtitle"}[match[3]]
+    stdout = _run("codecs", sp_kwargs)
+    data = {}
+    for match in _ffCodecRegexp.finditer(stdout):
+        stype = {"V": "video", "A": "audio", "S": "subtitle"}[match[3]]
 
-            desc = match[8]
-            encoders = _ffEncodersRegexp.match(desc)
-            if encoders:
-                desc = desc.slice(0, encoders.index) + desc.slice(
-                    encoders.index + encoders[0].length
-                )
-            encoders = encoders[1].trim().split(" ") if encoders else None
+        desc = match[8]
+        encoders = _ffEncodersRegexp.match(desc)
+        if encoders:
+            desc = desc.slice(0, encoders.index) + desc.slice(
+                encoders.index + encoders[0].length
+            )
+        encoders = encoders[1].trim().split(" ") if encoders else None
 
-            decoders = _ffDecodersRegexp.match(desc)
-            if decoders:
-                desc = desc.slice(0, decoders.index) + desc.slice(
-                    decoders.index + decoders[0].length
-                )
-            decoders = decoders[1].trim().split(" ") if decoders else None
+        decoders = _ffDecodersRegexp.match(desc)
+        if decoders:
+            desc = desc.slice(0, decoders.index) + desc.slice(
+                decoders.index + decoders[0].length
+            )
+        decoders = decoders[1].trim().split(" ") if decoders else None
 
-            data[match[7]] = {
-                "type": stype,
-                "description": desc,
-                "can_decode": match[1] == "D",
-                "decoders": decoders,
-                "can_encode": match[2] == "E",
-                "encoders": encoders,
-                "intra_frame_only": match[4] == "I",
-                "is_lossy": match[5] == "L",
-                "is_lossless": match[6] == "S",
-            }
-            if not encoders:
-                del data[match[7]]["encoders"]
-            if not decoders:
-                del data[match[7]]["decoders"]
-
-        _cache["codecs"] = data
+        data[match[7]] = {
+            "type": stype,
+            "description": desc,
+            "can_decode": match[1] == "D",
+            "decoders": decoders,
+            "can_encode": match[2] == "E",
+            "encoders": encoders,
+            "intra_frame_only": match[4] == "I",
+            "is_lossy": match[5] == "L",
+            "is_lossless": match[6] == "S",
+        }
+        if not encoders:
+            del data[match[7]]["encoders"]
+        if not decoders:
+            del data[match[7]]["decoders"]
 
     # return all if no argument specified
     if type is None and stream_type is None:
@@ -291,11 +322,17 @@ def codecs(type=None, stream_type=None):
     return {k: v for k, v in data.items() if pick(v)}
 
 
-def encoders(type=None):
+def encoders(
+    stream_type: Literal["audio", "video", "subtitle"] | None = None,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get summary of FFmpeg encoders
 
-    :param type: specify stream type, defaults to None
-    :type type: 'audio'|'video'|'subtitle', optional
+    :param stream_type: specify stream type, defaults to None
+    :type stream_type: 'audio'|'video'|'subtitle', optional
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of encoders
     :rtype: dict
 
@@ -314,14 +351,20 @@ def encoders(type=None):
     directRendering   bool  True if supports direct encoding method 1
     ================  ====  ===============================================
     """
-    return _coders("encoders", type)
+    return _coders("encoders", stream_type, sp_kwargs)
 
 
-def decoders(type=None):
+def decoders(
+    stream_type: Literal["audio", "video", "subtitle"] | None = None,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get summary of FFmpeg decoders
 
     :param stream_type: specify stream type, defaults to None
     :type stream_type: 'audio'|'video'|'subtitle', optional
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of decoders or encoders
     :rtype: dict
 
@@ -341,28 +384,29 @@ def decoders(type=None):
     directRendering   bool  True if supports direct encoding method 1
     ================  ====  ===============================================
     """
-    return _coders("decoders", type)
+    return _coders("decoders", stream_type, sp_kwargs)
 
 
-def _coders(type, stream_type=None):
+def _coders(
+    type,
+    stream_type=None,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     # reversed fftools/comdutils.c show_encoders()
 
-    stdout, data = _(type)
-    if not data:
-        data = {}
-        for match in _coderRegexp.finditer(stdout):
-            stype = {"V": "video", "A": "audio", "S": "subtitle"}[match[1]]
-            data[match[7]] = {
-                "type": stype,
-                "description": match[8],
-                "frame_mt": match[2] == "F",
-                "slice_mt": match[3] == "S",
-                "experimental": match[4] == "X",
-                "draw_horiz_band": match[5] == "B",
-                "directRendering": match[6] == "D",
-            }
-
-        _cache[type] = data
+    stdout = _run(type, sp_kwargs)
+    data = {}
+    for match in _coderRegexp.finditer(stdout):
+        stype = {"V": "video", "A": "audio", "S": "subtitle"}[match[1]]
+        data[match[7]] = {
+            "type": stype,
+            "description": match[8],
+            "frame_mt": match[2] == "F",
+            "slice_mt": match[3] == "S",
+            "experimental": match[4] == "X",
+            "draw_horiz_band": match[5] == "B",
+            "directRendering": match[6] == "D",
+        }
 
     if stream_type is not None:
         data = {k: v for k, v in data.items() if v["type"] == stream_type}
@@ -375,9 +419,12 @@ def _coders(type, stream_type=None):
 #    * /
 
 
-def formats():
+def formats(sp_kwargs: dict[str, Any] | None = None):
     """get FFmpeg formats
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of formats
     :rtype: dict
 
@@ -393,14 +440,19 @@ def formats():
     can_mux           bool  True if support outputs of this format
     ================  ====  ===============================================
     """
-    return _getFormats("formats", True)
+    return _getFormats("formats", True, sp_kwargs)
 
 
-def devices(type=None):
+def devices(
+    type: Literal["source", "sink"] = None, sp_kwargs: dict[str, Any] | None = None
+):
     """get FFmpeg devices
 
     :param type: specify source or sink type, defaults to None
     :type type: 'source'|'sink', optional
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of devices
     :rtype: dict
 
@@ -416,7 +468,7 @@ def devices(type=None):
     can_mux           bool  True if support outputs of this format
     ================  ====  ===============================================
     """
-    devs = _getFormats("devices", True)
+    devs = _getFormats("devices", True, sp_kwargs)
     if type:
         try:
             key = {"source": "can_demux", "sink": "can_mux"}[type]
@@ -426,9 +478,12 @@ def devices(type=None):
     return devs
 
 
-def muxers():
+def muxers(sp_kwargs: dict[str, Any] | None = None):
     """get FFmpeg muxers
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of muxers
     :rtype: dict
 
@@ -442,12 +497,15 @@ def muxers():
     description       str   Short description of the muxer
     ================  ====  ===============================================
     """
-    return _getFormats("muxers", False)
+    return _getFormats("muxers", False, sp_kwargs)
 
 
-def demuxers():
+def demuxers(sp_kwargs: dict[str, Any] | None = None):
     """get FFmpeg demuxers
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of demuxers
     :rtype: dict
 
@@ -461,13 +519,11 @@ def demuxers():
     description       str   Short description of the demuxer
     ================  ====  ===============================================
     """
-    return _getFormats("demuxers", False)
+    return _getFormats("demuxers", False, sp_kwargs)
 
 
-def _getFormats(type, doCan):
-    stdout, data = _(type)
-    if data:
-        return data
+def _getFormats(type, doCan, sp_kwargs: dict[str, Any] | None = None):
+    stdout = _run(type, sp_kwargs)
 
     data = {}
     for match in _formatRegexp.finditer(stdout):
@@ -477,35 +533,35 @@ def _getFormats(type, doCan):
             if doCan:
                 data[format]["can_demux"] = match[1] == "D"
                 data[format]["can_mux"] = match[2] == "E"
-
-    _cache[type] = data
     return data
 
 
 #   // reversed fftools/comdutils.c show_bsfs()
 
 
-def bsfilters():
+def bsfilters(sp_kwargs: dict[str, Any] | None = None):
     """get list of FFmpeg bitstream filters
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of bistream filters
     :rtype: list(str)
     """
-    stdout, data = _("bsfs")
-    if data:
-        return data
-
+    stdout = _run("bsfs", sp_kwargs)
     m = re.match(r"\s*Bitstream filters:\s+([\s\S]+)\s*", stdout)
-    _cache["bsfs"] = re.split(r"\s*\n\s*", m[1].strip())
-    return _cache["bsfs"]
+    return re.split(r"\s*\n\s*", m[1].strip())
 
 
 #   // reversed fftools/comdutils.c show_protocols()
 
 
-def protocols():
+def protocols(sp_kwargs: dict[str, Any] | None = None):
     """get list of supported protocols
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of protocols
     :rtype: dict
 
@@ -513,22 +569,22 @@ def protocols():
     supported protocol names.
 
     """
-    stdout, data = _("protocols")
-    if data:
-        return data
+    stdout = _run("protocols", sp_kwargs)
     match = re.search(r"Input:\s+([\s\S]+)Output:\s+([\s\S]+)", stdout)
-    _cache["protocols"] = dict(
+    return dict(
         input=re.split(r"\s*\n\s*", match[1]), output=re.split(r"\s*\n\s*", match[1])
     )
-    return _cache["protocols"]
 
 
 #   // according to fftools/comdutils.c show_pix_fmts()
 
 
-def pix_fmts():
+def pix_fmts(sp_kwargs: dict[str, Any] | None = None):
     """get supported pixel formats
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of supported pixel formats
     :rtype: dict
 
@@ -547,12 +603,9 @@ def pix_fmts():
     bitstream       bool  True if can be used with bistreams
     ==============  ====  ===============================================
     """
-    stdout, data = _("pix_fmts")
+    stdout = _run("pix_fmts", sp_kwargs)
 
-    if data:
-        return data
-
-    data = {
+    return {
         match[6]: dict(
             nb_components=int(match[7]),
             bits_per_pixel=int(match[8]),
@@ -567,13 +620,13 @@ def pix_fmts():
         )
     }
 
-    _cache["pix_fmts"] = data
-    return data
 
-
-def sample_fmts():
+def sample_fmts(sp_kwargs: dict[str, Any] | None = None):
     """get supported audio sample formats
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of supported audio sample formats
     :rtype: dict
 
@@ -582,17 +635,16 @@ def sample_fmts():
     """
 
     #   // according to fftools/comdutils.c show_sample_fmts()
-    stdout, data = _("sample_fmts")
-    if not data:
-        _cache["sample_fmts"] = data = {
-            match[1]: int(match[2]) for match in re.finditer(r"(\S+)\s+(\d+)", stdout)
-        }
-    return data
+    stdout = _run("sample_fmts", sp_kwargs)
+    return {match[1]: int(match[2]) for match in re.finditer(r"(\S+)\s+(\d+)", stdout)}
 
 
-def layouts():
+def layouts(sp_kwargs: dict[str, Any] | None = None):
     """get supported audio channel layouts
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of supported audio channel layouts
     :rtype: dict
 
@@ -604,15 +656,12 @@ def layouts():
     """
 
     #   // according to fftools/comdutils.c show_layouts()
-    stdout, data = _("layouts")
-    if data:
-        return data
-
+    stdout = _run("layouts", sp_kwargs)
     match = re.match(
         r"\s*Individual channels:\s+NAME\s+DESCRIPTION\s+(\S[\s\S]+)Standard channel layouts:\s+NAME\s+DECOMPOSITION\s+(\S[\s\S]+)",
         stdout,
     )
-    data = dict(
+    return dict(
         channels={
             m[1]: m[2] for m in re.finditer(r"(\S+)\s+\s([\s\S]+?)\s*\n", match[1])
         },
@@ -621,13 +670,13 @@ def layouts():
         },
     )
 
-    _cache["layouts"] = data
-    return data
 
-
-def colors():
+def colors(sp_kwargs: dict[str, Any] | None = None):
     """get recognized color names
 
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of color names
     :rtype: dict
 
@@ -636,22 +685,24 @@ def colors():
     """
 
     #   // according to fftools/comdutils.c show_colors()
-    stdout, data = _("colors")
-    if data:
-        return data
-
-    data = {
+    stdout = _run("colors", sp_kwargs)
+    return {
         match[1]: match[2]
         for match in re.finditer(r"(\S+)\s+(\#[0-9a-f]{6})\s*?\n", stdout)
     }
 
-    _cache["colors"] = data
-    return data
 
-
-def demuxer_info(name):
+def demuxer_info(
+    name: str,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get detailed info of a media demuxer
 
+    :param name: Name of the demuxer
+    :type name: str
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of features
     :rtype: dict
 
@@ -668,31 +719,32 @@ def demuxer_info(name):
     """
 
     #   // according to fftools/comdutils.c show_help_demuxer()
-    stdout, data = __("demuxer", name)
-    if data:
-        return data
+    stdout = _run_help("demuxer", name, sp_kwargs)
 
     m = re.match(
         r"Demuxer (\S+) \[([^\]]+)\]:\s*?\n(?:    Common extensions: ([^.]+)\.\s*\n)?([\s\S]*)",
         stdout,
     )
 
-    data = dict(
+    return dict(
         names=m[1].split(","),
         long_name=m[2],
         extensions=m[3].split(",") if m[3] else [],
         options=m[4],
     )
 
-    if not "demuxer" in _cache:
-        _cache["demuxer"] = {}
-    _cache["demuxer"][name] = data
-    return data
 
-
-def muxer_info(name):
+def muxer_info(
+    name: str,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get detailed info of a media muxer
 
+    :param name: Name of the muxer
+    :type name: str
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of features
     :rtype: dict
 
@@ -714,16 +766,14 @@ def muxer_info(name):
 
     #   // according to fftools/comdutils.c show_help_muxer()
 
-    stdout, data = __("muxer", name)
-    if data:
-        return data
+    stdout = _run_help("muxer", name, sp_kwargs)
 
     m = re.match(
         r"Muxer (\S+) \[([^\]]+)\]:\s*?\n(?:    Common extensions: ([^.]+)\.\s*?\n)?(?:    Mime type: ([^.]+)\.\s*?\n)?(?:    Default video codec: ([^.]+)\.\s*?\n)?(?:    Default audio codec: ([^.]+)\.\s*?\n)?(?:    Default subtitle codec: ([^.]+).\s*?\n)?([\s\S]*)",
         stdout,
     )
 
-    data = {
+    return {
         "names": m[1].split(","),
         "long_name": m[2],
         "extensions": m[3].split(",") if m[3] else [],
@@ -733,15 +783,19 @@ def muxer_info(name):
         "subtitle_codecs": m[7].split(",") if m[7] else [],
         "options": m[8],
     }
-    if not "muxer" in _cache:
-        _cache["muxer"] = {}
-    _cache["muxer"][name] = data
-    return data
 
 
-def encoder_info(name):
+def encoder_info(
+    name: str,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get detailed info of an encoder
 
+    :param name: Name of the encoder
+    :type name: str
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of features
     :rtype: dict
 
@@ -763,12 +817,20 @@ def encoder_info(name):
     options                 str             Unparsed string, listing supported options
     ======================  ==============  ================================================
     """
-    return _getCodecInfo(name, True)
+    return _getCodecInfo(name, True, sp_kwargs)
 
 
-def decoder_info(name):
+def decoder_info(
+    name: str,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get detailed info of a decoder
 
+    :param name: Name of the decoder
+    :type name: str
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of features
     :rtype: dict
 
@@ -790,14 +852,16 @@ def decoder_info(name):
     options                 str             Unparsed string, listing supported options
     ======================  ==============  ================================================
     """
-    return _getCodecInfo(name, False)
+    return _getCodecInfo(name, False, sp_kwargs)
 
 
-def _getCodecInfo(name, encoder):
+def _getCodecInfo(
+    name,
+    encoder,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     #   // according to fftools/comdutils.c show_help_codec()
-    stdout, data = __("encoder" if encoder else "decoder", name)
-    if data:
-        return data
+    stdout = _run_help("encoder" if encoder else "decoder", name, sp_kwargs)
 
     type = "Encoder" if encoder else "Decoder"
     m = re.search(
@@ -824,7 +888,7 @@ def _getCodecInfo(name, encoder):
         + r"|\d+ channels \(.+?\)"
     )
 
-    data = {
+    return {
         "name": m[1],
         "long_name": m[2],
         "capabilities": m[3].split(" ") if m[3] and m[3] != "none" else [],
@@ -837,11 +901,6 @@ def _getCodecInfo(name, encoder):
         "supported_layouts": _re_layouts.findall(m[10]) if m[10] else [],
         "options": m[11],
     }
-
-    if not "muxer" in _cache:
-        _cache["muxer"] = {}
-    _cache["muxer"][name] = data
-    return data
 
 
 # fmt: off
@@ -921,11 +980,11 @@ def _get_filter_option(str, name):
     conv = (
         partial(_conv_func, int)
         if type in ("int", "int64", "uint64")
-        else partial(_conv_func, float)
-        if type in ("float", "double")
-        else partial(_conv_func, Fraction)
-        if type == "rational"
-        else (lambda s: s)
+        else (
+            partial(_conv_func, float)
+            if type in ("float", "double")
+            else partial(_conv_func, Fraction) if type == "rational" else (lambda s: s)
+        )
     )
 
     ranges = (
@@ -999,9 +1058,17 @@ def _get_filter_options(str):
     return name, opts
 
 
-def filter_info(name):
+def filter_info(
+    name: str,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get detailed info of a filter
 
+    :param name: Name of the filter
+    :type name: str
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of features
     :rtype: FilterInfo (namedtuple)
 
@@ -1043,9 +1110,7 @@ def filter_info(name):
     """
 
     #   // according to fftools/comdutils.c show_help_filter()
-    stdout, data = __("filter", name)
-    if data:
-        return data
+    stdout = _run_help("filter", name, sp_kwargs)
 
     blocks = re.split(r"\n(?! |\n|$)", stdout)
 
@@ -1093,15 +1158,13 @@ def filter_info(name):
             options = extra_options.pop(opt_name)
         elif len(extra_options) == 1:
             o_name, options = extra_options.popitem()
-            logger.info(
-                f"filter_info({name}): assigned mismatched AVOptions {o_name}."
-            )
+            logger.info(f"filter_info({name}): assigned mismatched AVOptions {o_name}.")
         else:
             logger.warning(
                 f"filter_info({name}): none of the AVOption sets appears to be the main option set:\n   {[k for k in extra_options]}"
             )
 
-    data = FilterInfo(
+    return FilterInfo(
         name,
         desc,
         threading,
@@ -1112,15 +1175,18 @@ def filter_info(name):
         timeline,
     )
 
-    if not "filter" in _cache:
-        _cache["filter"] = {}
-    _cache["filter"][name] = data
-    return data
 
-
-def bsfilter_info(name):
+def bsfilter_info(
+    name,
+    sp_kwargs: dict[str, Any] | None = None,
+):
     """get detailed info of a bitstream filter
 
+    :param name: Name of the bitstream filter
+    :type name: str
+    :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
+                      default to None
+    :type sp_kwargs: dict[str, Any], optional
     :return: list of features
     :rtype: dict
 
@@ -1137,9 +1203,7 @@ def bsfilter_info(name):
     """
 
     #   // according to fftools/comdutils.c show_help_bsf()
-    stdout, data = __("bsf", name)
-    if data:
-        return data
+    stdout = _run_help("bsf", name, sp_kwargs)
 
     m = re.match(
         r"Bit stream filter (\S+)\s*?\n"
@@ -1151,15 +1215,11 @@ def bsfilter_info(name):
     if stdout.startswith("Unknown"):
         raise Exception(stdout)
 
-    data = {
+    return {
         "name": m[1],
         "supported_codecs": m[2].split(" ") if m[2] else [],
         "options": m[3],
     }
-    if not "filter" in _cache:
-        _cache["filter"] = {}
-    _cache["filter"][name] = data
-    return data
 
 
 #:dict: list of video size presets with their sizes
