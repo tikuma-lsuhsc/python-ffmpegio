@@ -1,5 +1,31 @@
+import pytest
+
 import ffmpegio.caps as caps
 from pprint import pprint
+
+from os import path
+import re
+
+
+@pytest.mark.parametrize("exec", ("ffmpeg", "ffprobe"))
+@pytest.mark.parametrize("ver", ("5.1.2", "6.1.1", "7.0.1"))
+def test_parser(exec, ver):
+
+    with open(path.join("tests", "assets", f"{exec}_v{ver}.txt"), "rt") as f:
+
+        dump = f.read()
+
+        blocks = {
+            m[1]: m[2]
+            for b in re.split(r"\n\n+", dump) # group by empty line
+            if (m := re.match(r"(.+)?\n(.+)", b, re.MULTILINE | re.DOTALL)) is not None
+        }
+
+    dump.split("\n\n")
+
+    dict(b.split("\n", 1) for b in blocks)
+    print(dump)
+
 
 def test_all():
     filters = caps.filters()
@@ -42,12 +68,13 @@ def test_all():
         caps.bsfilter_info(bsf)
         break
 
+
 def test_options():
     pprint(caps.options(name_only=True))
-    pprint(caps.options('global'))
-    pprint(caps.options('video',True))
-    pprint(caps.options('per-file'))
+    pprint(caps.options("global"))
+    pprint(caps.options("video", True))
+    pprint(caps.options("per-file"))
 
-if __name__ == '__main__':
-    caps.encoder_info('mpeg1video')
 
+if __name__ == "__main__":
+    caps.encoder_info("mpeg1video")
