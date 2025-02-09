@@ -56,7 +56,7 @@ def test_query():
         list,
     )
     assert isinstance(
-        probe.query(url, "a:0", fields=("duration", "sample_rate", "sample_fmt")), dict
+        probe.query(url, "a:0", fields=("duration", "sample_rate", "sample_fmt")), list
     )
 
     assert all(
@@ -69,7 +69,7 @@ def test_query():
     assert (
         probe.query(
             url, "v:0", fields=("duration", "max_bit_rate"), keep_optional_fields=True
-        )["max_bit_rate"]
+        )[0]["max_bit_rate"]
         is None
     )
 

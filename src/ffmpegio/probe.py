@@ -729,9 +729,9 @@ def query(
         if len(info) == 0:
             raise ValueError(f"Unknown or invalid stream specifier: {streams}")
 
-        if isinstance(streams, (str, int)) and "index" in parse_stream_spec(streams):
-            # return dict only if a specific stream requested
-            info = info[0]
+        # if isinstance(streams, (str, int)) and "index" in parse_stream_spec(streams):
+        #     # return dict only if a specific stream requested
+        #     info = info[0]
 
     return info
 
@@ -751,7 +751,7 @@ def _audio_info(
         False,
         True,
         sp_kwargs,
-    )
+    )[0]
     return tuple(q[f] for f in fields)
 
 
@@ -777,7 +777,7 @@ def _video_info(
         False,
         True,
         sp_kwargs,
-    )
+    )[0]
     return tuple(q[f] for f in fields)
 
 
