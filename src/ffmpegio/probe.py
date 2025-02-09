@@ -167,6 +167,8 @@ def _exec(
     count_frames: bool | None = False,
     count_packets: bool | None = False,
     keep_optional_fields: bool | None = None,
+    *,
+    f: str | None = None,
 ) -> dict[str, str]:
     """execute ffprobe and return stdout as dict"""
 
@@ -176,6 +178,9 @@ def _exec(
         sp_opts = {**dict(sp_kwargs), **sp_opts}
 
     args = ["-hide_banner", "-of", "json", "-show_entries", entries]
+
+    if f is not None:
+        args.extend(("-f", f))
 
     if streams is not None:
         _add_select_streams(args, streams)
@@ -232,6 +237,7 @@ def _run(
     *args,
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    f: str | None = None,
     **kwargs,
 ) -> dict[str, str]:
     """execute ffprobe, return stdout as dict, and cache its output"""
@@ -240,9 +246,9 @@ def _run(
     if sp_kwargs is not None:
         sp_kwargs = tuple(sp_kwargs.items())
     return (
-        _exec_cached(url, entries, sp_kwargs, *args, **kwargs)
+        _exec_cached(url, entries, sp_kwargs, *args, **kwargs, f=f)
         if cache_output
-        else _exec(url, entries, sp_kwargs, *args, **kwargs)
+        else _exec(url, entries, sp_kwargs, *args, **kwargs, f=f)
     )
 
 
@@ -256,6 +262,8 @@ def full_details(
     keep_str_values: bool | None = False,
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    *,
+    f: str | None = None,
 ) -> dict[str, str | Number | Fraction]:
     """Retrieve full details of a media file or stream
 
@@ -279,6 +287,7 @@ def full_details(
     :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
                       default to None
     :type sp_kwargs: dict[str, Any], optional
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: media file information
     :rtype: dict[str, str|Number|Fraction]
 
@@ -292,7 +301,7 @@ def full_details(
     )
 
     results = _run(
-        url, modes, select_streams, cache_output=cache_output, sp_kwargs=sp_kwargs
+        url, modes, select_streams, cache_output=cache_output, sp_kwargs=sp_kwargs, f=f
     )
 
     if not modes["stream"]:
@@ -330,6 +339,8 @@ def format_basic(
     keep_str_values: bool | None = False,
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    *,
+    f: str | None = None,
 ) -> dict[str, str | Number | Fraction]:
     """Retrieve basic media format info
 
@@ -349,6 +360,7 @@ def format_basic(
     :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
                       default to None
     :type sp_kwargs: dict[str, Any], optional
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: set of media format information.
     :rtype: dict
 
@@ -383,6 +395,7 @@ def format_basic(
         keep_str_values,
         cache_output,
         sp_kwargs,
+        f=f,
     )
 
 
@@ -394,6 +407,8 @@ def streams_basic(
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
     stream_spec: str | None = None,
+    *,
+    f: str | None = None,
 ) -> list[dict[str, str | Number | Fraction]]:
     """Retrieve basic info of media streams
 
@@ -409,6 +424,7 @@ def streams_basic(
                       default to None
     :param stream_spec: Specify stream specification, defaults to None
     :type stream_spec: str | None, optional
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: List of media stream information.
 
     Media Stream Information dict Entries
@@ -433,6 +449,7 @@ def streams_basic(
         keep_str_values,
         cache_output,
         sp_kwargs,
+        f=f,
     )
 
 
@@ -444,6 +461,8 @@ def video_streams_basic(
     keep_str_values: bool | None = False,
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    *,
+    f: str | None = None,
 ) -> list[dict[str, str | Number | Fraction]]:
     """Retrieve basic info of video streams
 
@@ -458,6 +477,7 @@ def video_streams_basic(
     :param cache_output: True to cache FFprobe output, defaults to False
     :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
                       default to None
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: List of video stream information.
 
 
@@ -512,6 +532,7 @@ def video_streams_basic(
         keep_str_values,
         cache_output,
         sp_kwargs,
+        f=f,
     )
 
     def adjust(res):
@@ -553,6 +574,8 @@ def audio_streams_basic(
     keep_str_values: bool | None = False,
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    *,
+    f: str | None = None,
 ) -> list[dict[str, str | Number | Fraction]]:
     """Retrieve basic info of audio streams
 
@@ -567,6 +590,7 @@ def audio_streams_basic(
     :param cache_output: True to cache FFprobe output, defaults to False
     :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
                       default to None
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: List of audio stream information.
 
     Audio Stream Information Entries
@@ -614,6 +638,7 @@ def audio_streams_basic(
         keep_str_values,
         cache_output,
         sp_kwargs,
+        f=f,
     )
 
     def adjust(res):
@@ -651,6 +676,8 @@ def query(
     keep_str_values: bool | None = False,
     cache_output: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    *,
+    f: str | None = None,
 ) -> (
     dict[str, Any]
     | Sequence[dict[str, Any]]
@@ -676,6 +703,7 @@ def query(
     :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
                       default to None
     :type sp_kwargs: dict[str, Any], optional
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: field name-value dict. If streams argument is given but does not specify
              index, a list of dict is returned instead
     :rtype: dict or list or dict
@@ -697,6 +725,7 @@ def query(
         sp_kwargs=sp_kwargs,
         cache_output=cache_output,
         keep_optional_fields=keep_optional_fields,
+        f=f,
     )
 
     if not keep_str_values:
@@ -719,6 +748,8 @@ def _audio_info(
     url: str | BinaryIO | memoryview,
     stream: str | None,
     sp_kwargs: dict[str, Any] | None,
+    *,
+    f: str | None = None,
 ) -> tuple[int | None, str | None, int | None]:
     "returns (sample_rate, sample_fmt, channels) of the specified url/stream"
     fields = ["sample_rate", "sample_fmt", "channels"]
@@ -730,6 +761,7 @@ def _audio_info(
         False,
         True,
         sp_kwargs,
+        f=f,
     )[0]
     return tuple(q[f] for f in fields)
 
@@ -738,6 +770,7 @@ def _video_info(
     url: str | BinaryIO | memoryview,
     stream: str | None,
     sp_kwargs: dict[str, Any] | None,
+    f: str | None = None,
 ) -> tuple[
     str | None,
     int | None,
@@ -756,6 +789,7 @@ def _video_info(
         False,
         True,
         sp_kwargs,
+        f=f,
     )[0]
     return tuple(q[f] for f in fields)
 
@@ -767,6 +801,8 @@ def frames(
     intervals: IntervalSpec | Sequence[IntervalSpec] | None = None,
     accurate_time: bool | None = False,
     sp_kwargs: dict[str, Any] | None = None,
+    *,
+    f: str | None = None,
 ) -> list[dict] | list[str | int | float]:
     """get frame information
 
@@ -784,6 +820,7 @@ def frames(
     :param sp_kwargs: Additional keyword arguments for :py:func:`subprocess.run`,
                       default to None
     :type sp_kwargs: dict[str, Any], optional
+    :param f: Use the specified media container format, defaults to None (auto-detect)
     :return: frame information. list of dictionary if entries is None or a sequence; list of the selected entry
              if entries is str (i.e., a single entry)
     :rtype: list[dict] or list[str|int|float]
@@ -823,6 +860,7 @@ def frames(
         sp_kwargs and tuple(sp_kwargs.items()),
         streams=streams,
         intervals=intervals,
+        f=f,
     )
 
     out = [_items_to_numeric(d) for d in res["frames"]]
